@@ -1,0 +1,6 @@
+path: C:\Users\verdant\Desktop\basket-ai\dataset
+train: train/images
+val: train/images
+
+nc: 3
+names: ["ball", "judge", "player"]
