@@ -18,5 +18,4 @@ def get_last_model(verbose = False):
     numbers = [num for num in numbers if num is not None]
 
     last_model = f'runs/detect/train{max(numbers)}/weights/best.pt'
-
     return YOLO(last_model, verbose=verbose)
