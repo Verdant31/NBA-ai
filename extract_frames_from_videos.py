@@ -1,5 +1,6 @@
 import cv2
 import os
+import uuid
 
 os.makedirs('frames', exist_ok=True)
 
@@ -11,7 +12,7 @@ for video_file in os.listdir('videos'):
     
     cap = cv2.VideoCapture(video_path)
     fps = int(cap.get(cv2.CAP_PROP_FPS))
-    frame_interval = fps
+    frame_interval = fps//2
     
     frame_count = 0
     while cap.isOpened():
@@ -20,7 +21,7 @@ for video_file in os.listdir('videos'):
         if not ret:
             break
         
-        frame_filename = os.path.join('frames', f'{os.path.splitext(video_file)[0]}_frame_{frame_count}.jpg')
+        frame_filename = os.path.join('frames', f'{os.path.splitext(video_file)[0]}--{uuid.uuid4()}.jpg')
         cv2.imwrite(frame_filename, frame)
         
         frame_count += frame_interval

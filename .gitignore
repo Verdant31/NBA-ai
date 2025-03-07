@@ -2,3 +2,9 @@ basket-env
 __pycache__
 runs
 frames
+jersey-number-pipeline
+cropped
+kmeans
+datasets
+.env
+videos

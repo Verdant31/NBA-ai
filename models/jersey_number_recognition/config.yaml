@@ -1,0 +1,7 @@
+path: C:\Users\verdant\Desktop\basket-ai\datasets\jersey_number_recognition
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 12
+names: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "cero", "n"]
