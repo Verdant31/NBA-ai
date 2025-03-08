@@ -1,46 +1,26 @@
-from uuid import uuid4
 import time
 import torch
 import cv2
 import os
 import signal
-from multiprocessing import Pool
+from multiprocessing import Pool, freeze_support
 from my_modules import get_last_model, log
 from tqdm import tqdm
-from deep_sort_realtime.deepsort_tracker import DeepSort
-from sys import exit
 import sys
 from tabulate import tabulate
-import signal
-from multiprocessing import Pool, freeze_support
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 pool = None
-tracker = DeepSort(
-    max_age=20,
-    n_init=2,
-    nms_max_overlap=0.3,
-    max_cosine_distance=0.8,
-    nn_budget=None,
-    override_track_class=None,
-    embedder="mobilenet",
-    half=True,
-    bgr=True,
-    embedder_model_name=None,
-    embedder_wts=None,
-    polygon=False,
-    today=None,
-)
 
 
 def init_worker():
     global model
     try:
         model = get_last_model(model_name="player_recognition")
-    except:
-        log("Error loading model.")
+    except Exception as e:
+        log("Error loading player recognition model: {}".format(e))
 
 
 jersey_number_model = get_last_model(
@@ -52,22 +32,16 @@ def get_jersey_number_from_frame(frame):
     try:
         results = jersey_number_model.predict(frame, conf=0.5, verbose=False)
         jersey_number = ''
-
         for result in results:
             boxes = result.boxes.xyxy
             scores = result.boxes.conf
             labels = result.boxes.cls
-
             for _, _, label in zip(boxes, scores, labels):
                 number = jersey_number_model.names[int(label)]
-                jersey_number = f'{jersey_number}{number}'
-
-        if len(jersey_number) > 0:
-            return jersey_number
-        else:
-            return None
-    except Exception:
-        print("Erro na extração do número da camisa")
+                jersey_number += str(number)
+        return jersey_number if jersey_number else None
+    except Exception as e:
+        log("Error extracting jersey number: {}".format(e))
         return None
 
 
@@ -76,74 +50,58 @@ def process_frame(frame):
     try:
         if frame is None:
             return None, 0, jersey_numbers_frame
-
         start_time = time.time()
         results = model.predict(frame, device=device, verbose=False)
         end_time = time.time()
         inference_time = (end_time - start_time) * 1000
 
-        detections = []
-
         for result in results:
             for box in result.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                w, h = x2 - x1, y2 - y1
-
                 conf = box.conf[0].item()
                 cls = int(box.cls[0].item())
-
-                detections.append(([x1, y1, w, h], conf, cls))
-
                 if model.names[cls] == "player" and conf > 0.6:
                     cropped = frame[y1:y2, x1:x2]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    cv2.putText(frame, f"{str(model.names[cls])}", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     jersey_number = get_jersey_number_from_frame(cropped)
                     if jersey_number:
-                        if jersey_number not in jersey_numbers_frame:
-                            jersey_numbers_frame[jersey_number] = 1
-                        else:
-                            jersey_numbers_frame[jersey_number] += 1
-
-        tracks = tracker.update_tracks(detections, frame=frame)
-        for track in tracks:
-            if not track.is_confirmed():
-                continue
-            ltrb = track.to_ltrb()
-            cv2.rectangle(frame, (int(ltrb[0]), int(ltrb[1])), (int(
-                ltrb[2]), int(ltrb[3])), (0, 0, 255), 2)
-            cv2.putText(frame, f"{str(track.track_id)}", (int(ltrb[0]), int(ltrb[1] - 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        jersey_numbers_frame[jersey_number] = jersey_numbers_frame.get(
+                            jersey_number, 0) + 1
 
         return frame, inference_time, jersey_numbers_frame
-    except Exception:
-        print('Erro no processamento do frame')
+    except Exception as e:
+        log("Error processing frame: {}".format(e))
         return frame, 0, jersey_numbers_frame
 
 
-def cleanup(cap, out):
+def cleanup(cap):
     global pool
+    log("Starting cleanup...")
     if cap:
         cap.release()
-    if out:
-        out.release()
-
+        log("Video capture released.")
     if pool:
         pool.terminate()
         pool.join()
-        log("Pool terminated.")
-
+        log("Multiprocessing pool terminated and joined.")
+    cv2.destroyAllWindows()
+    log("Destroyed all OpenCV windows.")
     log("Cleanup complete. Resources released.")
 
 
 def signal_handler():
     log("Interrupt received, terminating...")
-    cleanup(cap, out, inference_times)
-    exit(0)
+    cleanup(cap)
+    sys.exit(0)
 
 
 def frame_generator():
     while True:
         ret, frame = cap.read()
         if not ret:
+            log("No more frames to read from video.")
             break
         yield frame
     cap.release()
@@ -152,15 +110,17 @@ def frame_generator():
 if __name__ == '__main__':
     freeze_support()
 
-    input_video_path = './test/small_input.mp4'
+    input_video_path = './test/input.mp4'
     output_video_path = './test/output.mp4'
 
     cap = cv2.VideoCapture(input_video_path)
+    if not cap.isOpened():
+        log("Error opening video file: {}".format(input_video_path))
+        sys.exit(1)
     frame_width = int(cap.get(3))
     frame_height = int(cap.get(4))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
     out = cv2.VideoWriter(
         output_video_path,
         cv2.VideoWriter_fourcc(*'mp4v'),
@@ -169,10 +129,15 @@ if __name__ == '__main__':
     )
     inference_times = []
     identified_jersey_numbers = {}
+    log("Video opened. Dimensions: {}x{}, FPS: {}, Total Frames: {}".format(
+        frame_width, frame_height, fps, total_frames))
+    PREBUFFER_COUNT = fps
 
     num_processes = 4 if device == "cuda" else os.cpu_count()
-
     signal.signal(signal.SIGINT, signal_handler)
+
+    inference_times = []
+    identified_jersey_numbers = {}
 
     try:
         pool = Pool(processes=num_processes, initializer=init_worker)
@@ -217,4 +182,4 @@ if __name__ == '__main__':
         print(tabulate(table_data, headers=[
             'Jersey Number', 'Count'], tablefmt='pretty'))
 
-        cleanup(cap, out)
+        cleanup(cap)
